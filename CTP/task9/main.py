@@ -5,6 +5,7 @@ from board import SCL, SDA
 import busio
 from adafruit_pca9685 import PCA9685
 from adafruit_motor import motor
+import threading
 
 Tr = 23
 Ec = 24
@@ -70,14 +71,32 @@ def checkdist():
     return (sensor.distance) *100 # Unit: cm
 
 if __name__ == '__main__':
-  try:
-    chann =  1
-    
-    while True:
-        distance = checkdist()
-        if distance > 50:
-            getToSpeed(50,1,0.5)
-        else:
-            getToSpeed(0,1,0.5)
-  except KeyboardInterrupt:
-    destroy()
+    running = True
+    motorOn = False
+
+    def movement_loop():
+        global motorOn
+        while running:
+            if motorOn:
+                distance = checkdist()
+                if distance > 20:
+                    getToSpeed(50, 1, 0.5)
+                else:
+                    getToSpeed(0,1,0.5)
+                    motorOn = False
+
+    move_thread = threading.Thread(target=movement_loop, daemon=True)
+    move_thread.start()
+
+    print("Input 'M' to start, 'A' to stop\n")
+    try:
+        while running:
+            choice = input(".")
+            if choice == 'A':
+                motorOn = False
+                getToSpeed(0,1,0.5)
+            elif choice == 'M':
+                motorOn = True
+    except KeyboardInterrupt:
+        running = False
+        destroy()

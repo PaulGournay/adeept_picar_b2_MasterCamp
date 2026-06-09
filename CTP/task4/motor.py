@@ -89,17 +89,7 @@ def getToSpeed(goalSpeed, direction, duration):
         speed = map(vitesse, 0, 100, 0, 1.0)
         motor1.throttle = speed
         time.sleep(duration / 100)
-
-
-
-def slowStop(currentSpeed):
-    chann=1
-    while currentSpeed>0:
-        currentSpeed-=1
-        Motor(chann,1,currentSpeed)
-        time.sleep(0.01)
-
-    
+ 
 
 
 def destroy():
