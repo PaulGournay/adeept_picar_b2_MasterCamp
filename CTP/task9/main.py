@@ -1,151 +1,169 @@
-from gpiozero import DistanceSensor
-from time import sleep
-import time
-from board import SCL, SDA
-import busio
-from adafruit_pca9685 import PCA9685
-from adafruit_motor import motor
-import threading
-import sys
 import os
+import sys
+import time
+import threading
+from time import sleep
+import busio
+from board import SCL, SDA
+from gpiozero import DistanceSensor
+from adafruit_pca9685 import PCA9685
+import warnings
 
-import CTP.task9.ledmanager as ledmanager
-from CTP.task9.ledmanager import Adeept_SPI_LedPixel
+# Masque les avertissements inutiles de gpiozero
+warnings.filterwarnings("ignore")
+
+# --- IMPORTS DE TES CLASSES ---
+from ledmanager import Adeept_SPI_LedPixel
 from smooth_motor import SmoothMotor
+
+# ==========================================
+# 1. INITIALISATION DU MATÉRIEL
+# ==========================================
 Tr = 23
 Ec = 24
-sensor = DistanceSensor(echo=Ec, trigger=Tr,max_distance=2) # Maximum detection distance 2m.
+sensor = DistanceSensor(echo=Ec, trigger=Tr, max_distance=2)
 
-# motor_EN_A: Pin7  |  motor_EN_B: Pin11
-# motor_A:  Pin8,Pin10    |  motor_B: Pin13,Pin12
-
-vitesse = 0
-
-MOTOR_M1_IN1 =  15      #Define the positive pole of M1
-MOTOR_M1_IN2 =  14      #Define the negative pole of M1
-
-Dir_forward   = 0
-Dir_backward  = 1
-
-left_forward  = 1
-left_backward = 0
-
-right_forward = 0
-right_backward= 1
-
-pwn_A = 0
-pwm_B = 0
-  
-def map(x,in_min,in_max,out_min,out_max):
-  return (x - in_min)/(in_max - in_min) *(out_max - out_min) +out_min
-
-
-#def setup():
 i2c = busio.I2C(SCL, SDA)
-# Create a simple PCA9685 class instance.
-#  pwm_motor.channels[7].duty_cycle = 0xFFFF
-pwm_motor = PCA9685(i2c, address=0x5f) #default 0x40
+pwm_motor = PCA9685(i2c, address=0x5f)
 pwm_motor.frequency = 50
 
-motor1 = motor.DCMotor(pwm_motor.channels[MOTOR_M1_IN1],pwm_motor.channels[MOTOR_M1_IN2] )
-motor1.decay_mode = (motor.SLOW_DECAY)
-#  motorStop()
+MOTOR_M1_IN1 = 15
+MOTOR_M1_IN2 = 14
 
+robot_motor = SmoothMotor(MOTOR_M1_IN1, MOTOR_M1_IN2)
+leds_robot = Adeept_SPI_LedPixel(count=14, bright=255)
 
-def motorStop():#Motor stops
-    motor1.throttle = 0
+# Variables globales
+running = True
+motorOn = False
+detresse_active = False
 
-def destroy():
-  motorStop()
-  pwm_motor.deinit()
+# ==========================================
+# 2. FONCTION FILTRE DU CAPTEUR
+# ==========================================
+def get_distance_filtree():
+    """Filtre les fausses lectures (bugs) à 0cm du capteur HC-SR04"""
+    mesures = []
+    for _ in range(3):
+        dist = sensor.distance * 100
+        if dist > 2.0:  # Ignore les bugs physiques
+            mesures.append(dist)
+        sleep(0.01)
+    if len(mesures) > 0:
+        return sum(mesures) / len(mesures)
+    return 200.0 # Voie libre par défaut en cas d'erreur
 
+# ==========================================
+# 3. BOUCLE EN ARRIÈRE-PLAN (MOTEUR + SÉCURITÉ)
+# ==========================================
+def background_task():
+    global motorOn, detresse_active
+    
+    leds_robot.set_all_led_color(0, 0, 0)
+    
+    while running:
+        if motorOn:
+            distance = get_distance_filtree()
+            # Affichage de contrôle (s'efface tout seul)
+            print(f"Distance: {distance:.1f} cm | Vitesse: {robot_motor.speed}%   ", end="\r")
+            
+            # --- CONDITION DE L'OBSTACLE ---
+            if distance < 20:
+                print(f"\n[OBSTACLE] à {distance:.1f} cm ! Début de la décélération...")
+                motorOn = False
+                
+                # ORDRE DE DÉCÉLÉRATION (Cible = 0)
+                robot_motor.accelerate_to(0, 1) 
+                
+                leds_robot.Feux_détresse_on()
+                detresse_active = True
 
-def getToSpeed(goalSpeed, direction, duration):
-    global vitesse                             # Utilisé par le fonction Motor
-    if direction == -1:
-        goalSpeed = -1 * goalSpeed
-    delta = (goalSpeed - vitesse) / 100
-    for i in range(100):
-        vitesse += delta
-        speed = map(vitesse, 0, 100, 0, 1.0)
-        motor1.throttle = speed
-        sleep(duration / 100)
+        # --- APPLICATION DE LA PENTE DE VITESSE ---
+        # Même si motorOn est passé à False, update_speed continue 
+        # de tourner et va baisser la vitesse doucement jusqu'à 0.
+        robot_motor.update_speed()
+        
+        sleep(0.05)
 
-# Get the distance of ultrasonic detection.
-def checkdist():
-    return (sensor.distance) *100 # Unit: cm
-
-
-
+# ==========================================
+# 4. PROGRAMME PRINCIPAL (CLAVIER)
+# ==========================================
 if __name__ == '__main__':
+    # Déclaration des variables d'état du programme
     running = True
     motorOn = False
     detresse_active = False
 
-    # Initialisation des LEDs
-    leds_robot = Adeept_SPI_LedPixel(count=14, bright=255)
-    leds_robot.set_all_led_color(0, 0, 0)
-    
-    def movement_loop():
+    # --- 1er Process : Définition du Thread en arrière-plan ---
+    def background_task():
         global motorOn, detresse_active
-        print("[Thread] Gestionnaire de mouvement et sécurité démarré.")
+        
+        # S'assure que les LED sont éteintes au départ
+        leds_robot.set_all_led_color(0, 0, 0)
         
         while running:
-            # 1. Gestion de la sécurité distance (Prioritaire)
             if motorOn:
-                distance = checkdist()
-                if distance > 20:
-                    # Tout est OK -> On demande d'aller à 50% de vitesse en marche avant (1)
-                    robot_motor.accelerate_to(50, 1)
-                else:
-                    # DANGER : Obstacle proche !
-                    print(f"\n[ALERTE] Obstacle détecté à {distance:.1f} cm ! Arrêt d'urgence.")
+                distance = get_distance_filtree()
+                
+                # --- CONDITION DE L'OBSTACLE ---
+                if distance < 20:
+                    print(f"\n[OBSTACLE] à {distance:.1f} cm ! Début de la décélération...")
                     motorOn = False
-                    # Arrêt immédiat pour sécurité, pas de rampe lente ici !
-                    robot_motor.set_speed_immediate(0, 1) 
+                    
+                    # ORDRE DE DÉCÉLÉRATION (Cible = 0)
+                    robot_motor.accelerate_to(0, 1) 
+                    
                     leds_robot.Feux_détresse_on()
                     detresse_active = True
-            else:
-                # Si l'utilisateur a coupé manuellement ou si arrêt d'urgence
-                # On s'assure que le moteur vise bien 0
-                if not detresse_active: 
-                    robot_motor.accelerate_to(0, 1)
 
-            # 2. APPLICATION DE LA RAMPE SMOOTH
-            # update_speed() modifie légèrement la vitesse à chaque cycle
+            # --- APPLICATION DE LA PENTE DE VITESSE ---
             robot_motor.update_speed()
             
-            # Fréquence de rafraîchissement de la rampe (20ms)
-            sleep(0.02)
+            sleep(0.05)
 
-    # Lancement du thread en arrière-plan
-    move_thread = threading.Thread(target=movement_loop, daemon=True)
-    move_thread.start()
+    # Lancement du 1er Process (Thread)
+    bg_thread = threading.Thread(target=background_task, daemon=True)
+    bg_thread.start()
 
-    print("Entrez 'M' pour démarrer, 'A' pour stopper.")
-    
+
+    # --- 2ème Process : Boucle principale (Clavier) ---
+    print("\n=== CONTRÔLE DU ROBOT ===")
+    print("M -> Marche avant")
+    print("A -> Arrêt manuel")
+    print("Ctrl+C -> Quitter")
+
     try:
         while running:
-            choice = input("Commande : ").strip().upper()
-            
+            choice = input("\nCommande (M/A) : ").strip().upper()
+
             if choice == 'A':
-                print("Arrêt manuel demandé.")
+                # Arrêt IMMÉDIAT (Consigne 2)
+                print("Arrêt manuel immédiat et extinction des feux.")
                 motorOn = False
-                
+                robot_motor.stop()
+                leds_robot.set_all_led_color(0, 0, 0) # Extinction des LED
+                detresse_active = False
+
             elif choice == 'M':
-                if detresse_active:
-                    print("Extinction des feux de détresse.")
-                    leds_robot.Feux_détresse_off()
-                    detresse_active = False
-                print("Marche avant activée.")
-                motorOn = True
-                
+                # Démarrage Progressif (Consignes 1 & 4)
+                dist = get_distance_filtree()
+                if dist < 20:
+                    print(f"Démarrage impossible, obstacle toujours présent ({dist:.1f} cm)")
+                else:
+                    if detresse_active:
+                        print("Voie libre, extinction des feux de détresse.")
+                        leds_robot.Feux_détresse_off()
+                        detresse_active = False
+
+                    print("Démarrage progressif vers 50% de puissance...")
+                    motorOn = True
+                    robot_motor.accelerate_to(50, 1)
+
     except KeyboardInterrupt:
-        print("\nFermeture du programme...")
+        print("\nArrêt du programme demandé...")
     finally:
         running = False
-        sleep(0.2) # Laisser le temps au thread de finir proprement
-        robot_motor.stop()
-        pwm_motor.deinit()
+        sleep(0.2)
+        robot_motor.destroy()
         leds_robot.set_all_led_color(0, 0, 0)
-        print("Robot éteint sécurisé.")
+        print("Robot éteint.")

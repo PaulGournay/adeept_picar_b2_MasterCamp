@@ -31,7 +31,7 @@ class SmoothMotor:
         self.motor.throttle = 0
 
     def accelerate_to(self, speed, direction):
-        if direction != -1 or direction != 1:
+        if direction != -1 and direction != 1:
             direction = 1
         if speed > 100:
             speed = 100
