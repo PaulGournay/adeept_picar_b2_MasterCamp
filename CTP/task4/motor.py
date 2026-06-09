@@ -41,6 +41,8 @@ motor4 = motor.DCMotor(pwm_motor.channels[MOTOR_M4_IN1],pwm_motor.channels[MOTOR
 motor4.decay_mode = (motor.SLOW_DECAY)
 # motorStop()
 
+vitesse = 0
+
 def Motor(channel,direction,motor_speed):
     if motor_speed > 100:
         motor_speed = 100
@@ -65,24 +67,38 @@ def motorStop():#Motor stops
     motor4.throttle = 0
 
 def slowSpeed():
-    chann = 1
+    chann = 1                               # utilisé par la fonction Motor
     for i in range(2):
-        speed_set = 25
-        Motor(chann, 1, speed_set)
+        speed_set = 25                      # 25% de la vitesse maximale
+        Motor(chann, 1, speed_set)          # Avance
         print("Forward")
-        time.sleep(2)
-        Motor(chann, -1 ,speed_set)
-        print("Backward")
-        time.sleep(2)
-    destroy()
+        time.sleep(2)                       # Marque une pause
+        Motor(chann, -1 ,speed_set)         # Recule
+        print("Backward")                   
+        time.sleep(2)                       # Marque une pause
+    destroy()                               # Stop le moteur
+
 
 def getToSpeed(goalSpeed, direction, duration):
-    chann =1
-    motor_speed = 0
-    while motor_speed < goalSpeed:
-        motor_speed += 1
-        Motor(chann, direction, motor_speed)
-        time.sleep(duration / goalSpeed)
+    global vitesse                             
+    if direction == -1:
+        goalSpeed = -1 * goalSpeed
+    delta = (goalSpeed - vitesse) / 100
+    for i in range(100):
+        vitesse += delta
+        speed = map(vitesse, 0, 100, 0, 1.0)
+        motor1.throttle = speed
+        time.sleep(duration / 100)
+
+
+
+def slowStop(currentSpeed):
+    chann=1
+    while currentSpeed>0:
+        currentSpeed-=1
+        Motor(chann,1,currentSpeed)
+        time.sleep(0.01)
+
     
 
 
