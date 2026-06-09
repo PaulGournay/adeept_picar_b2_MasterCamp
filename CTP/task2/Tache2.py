@@ -295,6 +295,12 @@ class Adeept_SPI_LedPixel(threading.Thread):
         
         # REQUIS CRITIQUE : Envoyer le signal physique aux WS2812 !
         self.show()
+    def Feux_détresse_on(self):
+        for i in range(1,6):
+            self.piloter_led(i,'R',255)
+    def Feux_détresse_off(self):
+        for i in range(1,6):
+            self.piloter_led(i,'R',255)
 
         
             
