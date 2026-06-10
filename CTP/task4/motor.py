@@ -60,6 +60,12 @@ def Motor(channel,direction,motor_speed):
     elif channel == 4:
         motor4.throttle = speed
 
+
+
+def destroy():
+    motorStop()
+    pwm_motor.deinit()
+
 def motorStop():#Motor stops
     motor1.throttle = 0
     motor2.throttle = 0
@@ -80,25 +86,22 @@ def slowSpeed():
 
 
 def getToSpeed(goalSpeed, direction, duration):
-    global vitesse                             
-    if direction == -1:
-        goalSpeed = -1 * goalSpeed
-    delta = (goalSpeed - vitesse) / 100
+    global vitesse                          # vitesse actuelle du robot     
+    if direction == -1:                     
+        goalSpeed = -1 * goalSpeed          # si marche arrière mettre la vitesse en négatif
+    delta = (goalSpeed - vitesse) / 100     # calcul de l'incrémentation de la vitesse
     for i in range(100):
-        vitesse += delta
-        speed = map(vitesse, 0, 100, 0, 1.0)
-        motor1.throttle = speed
-        time.sleep(duration / 100)
+        vitesse += delta                    # incrémentation de la vitesse
+        speed = map(vitesse, 0, 100, 0, 1.0)# normalise entre 0 et 1 la vitesse
+        motor1.throttle = speed             # active le robot
+        time.sleep(duration / 100)          # attend 1/100 de la durée donnée
  
 
-
-def destroy():
-    motorStop()
-    pwm_motor.deinit()
-
 if __name__ == '__main__':
-    try:
-        getToSpeed(100,1,1)
-        motorStop()
+    try:          
+        slowSpeed()                # Avance puis recule à 25% de la vitesse
+
+        getToSpeed(100,1,1)                 # Avancec à 100% de la vitesse
+        getToSpeed(0,1,1)                   # S'arrête progressivement
     except KeyboardInterrupt:
         destroy()
