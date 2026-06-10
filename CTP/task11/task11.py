@@ -37,7 +37,7 @@ pwm_motor.frequency = 50
 m = motor.DCMotor(pwm_motor.channels[MOTOR_M1_IN1],pwm_motor.channels[MOTOR_M1_IN2])
 m.decay_mode = (motor.SLOW_DECAY)
 
-robot_motor = SmoothMotor(m, 1)
+robot_motor = SmoothMotor(m, 4)
 
 running = True
 status = 0
@@ -49,6 +49,8 @@ def set_angle(angle):
 def background_task():
     global running
 
+    steering = 0
+
     while running:
         if status == 1:
             status_right = right.value
@@ -57,23 +59,35 @@ def background_task():
             # print('left: %d   middle: %d   right: %d' %(status_right,status_middle,status_left))
             if status_left == 1 and status_middle == 1 and status_right == 0:
                 set_angle(75)
+                steering = -1
             if status_left == 1 and status_middle == 0 and status_right == 0:
                 set_angle(55)
-            if status_right == 1 and status_middle == 1 and status_left == 0:
+                steering = -1
+            if status_left == 0 and status_middle == 1 and status_right == 1:
                 set_angle(105)
-            if status_right == 1 and status_middle == 0 and status_left == 0:
+                steering = 1
+            if status_left == 0 and status_middle == 0 and status_right == 1:
                 set_angle(125)
-            if status_right == 0 and status_middle == 1 and status_left == 0:
+                steering = 1
+            if status_left == 0 and status_middle == 1 and status_left == 0:
                 set_angle(90)
+                steering = 0
             if status_right == 1 and status_middle == 1 and status_left == 1:
                 set_angle(90)
+                steering = 0
             if status_right == 0 and status_middle == 0 and status_left == 0:
-                robot_motor.accelerate_to(50, -1)
-                set_angle(90)
+                robot_motor.accelerate_to(20, -1, acceleration = 1)
+                if -4 < robot_motor.speed < 4:
+                    if steering == 0:
+                        set_angle(90)
+                    if steering == 1:
+                        set_angle(75)
+                    if steering == -1:
+                        set_angle(105)
             else:
-                robot_motor.accelerate_to(40, 1)
+                robot_motor.accelerate_to(20, 1, acceleration = 5)
         else:
-            robot_motor.accelerate_to(0, 1)
+            robot_motor.accelerate_to(0, 1, acceleration = 1)
         robot_motor.update_speed()
         sleep(0.05)
 

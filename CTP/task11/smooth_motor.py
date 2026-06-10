@@ -1,3 +1,6 @@
+def map(x,in_min,in_max,out_min,out_max):
+  return (x - in_min)/(in_max - in_min) *(out_max - out_min) +out_min
+
 class SmoothMotor:
     def __init__(self, motor, acceleration = 1):
         self.speed = 0
@@ -5,12 +8,12 @@ class SmoothMotor:
         self.direction = 1
         self.motor = motor
         self.acceleration = acceleration
-        self.motor.decay_mode = (motor.SLOW_DECAY)
 
     def stop(self):
         self.motor.throttle = 0
 
-    def accelerate_to(self, speed, direction):
+    def accelerate_to(self, speed, direction, acceleration=1):
+        self.acceleration = acceleration
         if direction != -1 and direction != 1:
             direction = 1
         if speed > 100:
@@ -39,6 +42,6 @@ class SmoothMotor:
         
     def update_speed(self):
         if self.speed < self.target_speed:
-            self._set_speed_immediate(self.speed + self.acceleration)
+            self._set_speed_immediate(min(self.speed + self.acceleration, self.target_speed))
         elif self.speed > self.target_speed:
-            self._set_speed_immediate(self.speed - self.acceleration)
+            self._set_speed_immediate(max(self.speed - self.acceleration, self.target_speed))
