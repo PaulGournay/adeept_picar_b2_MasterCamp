@@ -59,14 +59,6 @@ m.decay_mode = (motor.SLOW_DECAY)
 
 robot_motor = SmoothMotor(m, 4)
 
-
-i2c = busio.I2C(SCL, SDA)
-pca = PCA9685(i2c, address=0x5f)
-def set_angle(ID, angle):
-    servo_angle = servo.Servo(pca.channels[ID], min_pulse=500, max_pulse=2400,actuation_range=180)
-    servo_angle.angle = angle
-
-
 Tr = 23
 Ec = 24
 sensor = DistanceSensor(echo=Ec, trigger=Tr,max_distance=2) # Maximum detection distance 2m.
@@ -79,8 +71,8 @@ running = True
 status = 0
 steering = 0
 
-def set_angle(angle):
-    servo_angle = servo.Servo(pwm_motor.channels[0], min_pulse=500, max_pulse=2400,actuation_range=180)
+def set_angle(ID, angle):
+    servo_angle = servo.Servo(pwm_motor.channels[ID], min_pulse=500, max_pulse=2400,actuation_range=180)
     servo_angle.angle = angle
 
 def led_task():
@@ -146,32 +138,32 @@ def background_task():
             status_left = left.value
             # print('left: %d   middle: %d   right: %d' %(status_right,status_middle,status_left))
             if status_left == 1 and status_middle == 1 and status_right == 0:
-                set_angle(75)
+                set_angle(0, 75)
                 steering = -1
             if status_left == 1 and status_middle == 0 and status_right == 0:
-                set_angle(55)
+                set_angle(0, 55)
                 steering = -1
             if status_left == 0 and status_middle == 1 and status_right == 1:
-                set_angle(105)
+                set_angle(0, 105)
                 steering = 1
             if status_left == 0 and status_middle == 0 and status_right == 1:
-                set_angle(125)
+                set_angle(0, 125)
                 steering = 1
             if status_left == 0 and status_middle == 1 and status_left == 0:
-                set_angle(90)
+                set_angle(0, 90)
                 steering = 0
             if status_right == 1 and status_middle == 1 and status_left == 1:
-                set_angle(90)
+                set_angle(0, 90)
                 steering = 0
             if status_right == 0 and status_middle == 0 and status_left == 0:
                 robot_motor.accelerate_to(30, -1, acceleration = 2)
                 if -4 < robot_motor.speed < 4:
                     if steering == 0:
-                        set_angle(90)
+                        set_angle(0, 90)
                     if steering == 1:
-                        set_angle(75)
+                        set_angle(0, 75)
                     if steering == -1:
-                        set_angle(105)
+                        set_angle(0, 105)
             else:
                 robot_motor.accelerate_to(40, 1, acceleration = 5)
             
@@ -188,7 +180,6 @@ if __name__ == "__main__":
 
     light_thread = threading.Thread(target=led_task, daemon=True)
     light_thread.start()
-
     try:
         while True:
             choice = input("\nCommande (M/A) : ").strip().upper()
