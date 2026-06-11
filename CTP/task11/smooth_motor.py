@@ -20,6 +20,7 @@ class SmoothMotor:
             speed = 100
         if speed < 0:
             speed = 0
+        self.direction = direction
         self.target_speed = speed * direction
 
     def set_speed(self, speed, direction):
