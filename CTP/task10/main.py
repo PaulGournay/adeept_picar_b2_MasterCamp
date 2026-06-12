@@ -1,113 +1,235 @@
-from gpiozero import DistanceSensor
-from time import sleep
 import time
-from board import SCL, SDA
+import threading
+from time import sleep
 import busio
-import smbus
+from board import SCL, SDA
+from gpiozero import DistanceSensor, InputDevice, TonalBuzzer
 from adafruit_pca9685 import PCA9685
-from adafruit_motor import motor, servo
+from adafruit_motor import servo, motor
+import warnings
+import ledmanager 
+# Import de tes classes personnalisées
+from smooth_motor import SmoothMotor
+from ledmanager import Adeept_SPI_LedPixel  # Assure-toi d'avoir sauvegardé ta classe dans adeept_led.py
 
-Tr = 23
-Ec = 24
-sensor = DistanceSensor(echo=Ec, trigger=Tr,max_distance=2) # Maximum detection distance 2m.
+# Masque les avertissements inutiles de gpiozero
+warnings.filterwarnings("ignore")
 
-# motor_EN_A: Pin7  |  motor_EN_B: Pin11
-# motor_A:  Pin8,Pin10    |  motor_B: Pin13,Pin12
+# Configuration des capteurs de ligne / lumière
+line_pin_left = 22
+line_pin_middle = 27
+line_pin_right = 17
 
-vitesse = 0
+left = InputDevice(pin=line_pin_right)
+middle = InputDevice(pin=line_pin_middle)
+right = InputDevice(pin=line_pin_left)
 
-MOTOR_M1_IN1 =  15      #Define the positive pole of M1
-MOTOR_M1_IN2 =  14      #Define the negative pole of M1
+# Initialisation du Bandeau LED (14 LEDs)
+led_strip = Adeept_SPI_LedPixel(count=14, sequence='GRB')
 
-Dir_forward   = 0
-Dir_backward  = 1
+# Initialisation du Buzzer
+tb = TonalBuzzer(18)
 
-left_forward  = 1
-left_backward = 0
+# Moteur
+MOTOR_M1_IN1 = 15
+MOTOR_M1_IN2 = 14
 
-right_forward = 0
-right_backward= 1
-
-pwn_A = 0
-pwm_B = 0
-  
-def map(x,in_min,in_max,out_min,out_max):
-  return (x - in_min)/(in_max - in_min) *(out_max - out_min) +out_min
-
-
-#def setup():
 i2c = busio.I2C(SCL, SDA)
-# Create a simple PCA9685 class instance.
-#  pwm_motor.channels[7].duty_cycle = 0xFFFF
 pwm_motor = PCA9685(i2c, address=0x5f) #default 0x40
 pwm_motor.frequency = 50
 
-motor1 = motor.DCMotor(pwm_motor.channels[MOTOR_M1_IN1],pwm_motor.channels[MOTOR_M1_IN2] )
-motor1.decay_mode = (motor.SLOW_DECAY)
-#  motorStop()
+m = motor.DCMotor(pwm_motor.channels[MOTOR_M1_IN1], pwm_motor.channels[MOTOR_M1_IN2])
+m.decay_mode = (motor.SLOW_DECAY)
 
+robot_motor = SmoothMotor(m, 4)
 
-def motorStop():#Motor stops
-    motor1.throttle = 0
+# Capteur Ultrason
+Tr = 23
+Ec = 24
+sensor = DistanceSensor(echo=Ec, trigger=Tr, max_distance=2)
 
-def destroy():
-  motorStop()
-  pwm_motor.deinit()
-
-
-def getToSpeed(goalSpeed, direction, duration):
-    global vitesse                             # Utilisé par le fonction Motor
-    if direction == -1:
-        goalSpeed = -1 * goalSpeed
-    delta = (goalSpeed - vitesse) / 100
-    for i in range(100):
-        vitesse += delta
-        speed = map(vitesse, 0, 100, 0, 1.0)
-        motor1.throttle = speed
-        sleep(duration / 100)
-
-# Get the distance of ultrasonic detection.
 def checkdist():
-    return (sensor.distance) *100 # Unit: cm
+    return (sensor.distance) * 100 # Unité: cm
 
+# Variables Globales d'état
+running = True
+status = 0
+steering = 0
+hazard_lights = False
 
-class ADS7830(object):
-    def __init__(self):
-        self.cmd = 0x84
-        self.bus=smbus.SMBus(1)
-        self.address = 0x48 # 0x48 is the default i2c address for ADS7830 Module.   
+def set_angle(ID, angle):
+    servo_angle = servo.Servo(pwm_motor.channels[ID], min_pulse=500, max_pulse=2400, actuation_range=180)
+    servo_angle.angle = angle
 
-    def analogRead(self, chn): # ADS7830 has 8 ADC input pins, chn:0,1,2,3,4,5,6,7
-        value = self.bus.read_byte_data(self.address, self.cmd|(((chn<<2 | chn>>1)&0x07)<<4))
-        return value
+def led_task():
+    global hazard_lights, steering, running
+    x = 0
+    N = 20
+    led_strip.set_all_led_color(0, 0, 0) # Éteint tout au démarrage
 
+    while running:
+        # Priorité aux feux de détresse (Clignotement utilisant tes méthodes)
+        if hazard_lights:
+            x += 1
+            x %= N
+            if x < N/2:
+                led_strip.Feux_détresse_on()
+            else:
+                led_strip.Feux_détresse_off()
+            sleep(0.05)
+            continue
 
+        s = steering
+        if robot_motor.speed > 0:
+            s *= -1
 
-if __name__ == '__main__':
-  try:
-    chann =  1
-    adc = ADS7830()
+        if s == 0:
+            x = 0
+            # Blanc léger pour indiquer la marche avant
+            led_strip.set_all_led_color(50, 50, 50) 
+        elif s == 1: # Clignotant Droit (Ex: LEDs 4 à 7)
+            x += 1
+            x %= N
+            if x < N/2:
+                led_strip.set_all_led_color(0, 0, 0)
+                for i in range(4, 8): 
+                    led_strip.set_led_color_data(i, 255, 100, 0) # Orange
+                led_strip.show()
+            else:
+                led_strip.set_all_led_color(0, 0, 0)
+        elif s == -1: # Clignotant Gauche (Ex: LEDs 0 à 3)
+            x += 1
+            x %= N
+            if x < N/2:
+                led_strip.set_all_led_color(0, 0, 0)
+                for i in range(0, 4): 
+                    led_strip.set_led_color_data(i, 255, 100, 0) # Orange
+                led_strip.show()
+            else:
+                led_strip.set_all_led_color(0, 0, 0)
+        sleep(0.05)
 
-    previous_angle = 0
-    servo = servo.Servo(pwm_motor.channels[0], min_pulse=500, max_pulse=2400,actuation_range=180)
+def handle_obstacle():
+    """Gère la séquence d'arrêt, de recul et de reprise lors d'un obstacle."""
+    global hazard_lights, status
+    print("\n[!] Obstacle détecté ! Arrêt et feux de détresse.")
+    hazard_lights = True
     
-    while True:
-        distance = checkdist()
-        if distance > 50:
-            getToSpeed(50,1,0.5)
-        else:
-            getToSpeed(0,1,0.5)
+    # 1. Arrêt du robot et attente de 1 seconde
+    robot_motor.accelerate_to(0, 1, acceleration=10)
+    for _ in range(20): # 20 * 0.05s = 1s
+        if status == 0: return # Interruption manuelle 'A'
+        robot_motor.update_speed()
+        sleep(0.05)
         
+    # 2. Recul du robot d'environ 30 cm avec Bip Bip
+    print("[!] Recul en cours...")
+    robot_motor.accelerate_to(30, -1, acceleration=5)
+    set_angle(0, 90) # Garde les roues droites en reculant
+    
+    # Durée estimée pour 30cm: ~3 secondes (à ajuster)
+    for i in range(60): 
+        if status == 0: break # Interruption manuelle 'A'
+        robot_motor.update_speed()
+        # Bip bip intermittent
+        if i % 10 == 0:
+            tb.play("B4")
+        elif i % 10 == 5:
+            tb.stop()
+        sleep(0.05)
+        
+    tb.stop()
+    if status == 0: return
+    
+    # 3. Arrêt pendant 2 secondes avant reprise
+    print("[!] Pause de 2 secondes...")
+    hazard_lights = False
+    led_strip.Feux_détresse_off() # S'assure que les feux sont bien éteints
+    robot_motor.accelerate_to(0, 1, acceleration=10)
+    
+    for _ in range(40): # 40 * 0.05s = 2s
+        if status == 0: return # Interruption manuelle 'A'
+        robot_motor.update_speed()
+        sleep(0.05)
+        
+    print("[!] Reprise du suivi de lumière.")
 
-        adc_value = adc.analogRead(1)
-        target_angle = 180 - ((adc_value / 255) * 180)
+def background_task():
+    global running, steering, status
 
-        if target_angle < 20: target_angle = 20
-        elif target_angle > 160: target_angle = 160
+    while running:
+        if status == 1:
+            # Vérification de l'obstacle en priorité absolue
+            if checkdist() <= 20:
+                handle_obstacle()
+                continue # Passe l'itération pour ne pas écraser la séquence
 
-        if not (-10 <= previous_angle - target_angle <= 10):
-            previous_angle = target_angle
-            servo.angle = target_angle
+            # Logique de suivi "Source Lumineuse" (Tâche 9 conservée)
+            status_right = right.value
+            status_middle = middle.value
+            status_left = left.value
+            
+            if status_left == 1 and status_middle == 1 and status_right == 0:
+                set_angle(0, 75)
+                steering = -1
+            elif status_left == 1 and status_middle == 0 and status_right == 0:
+                set_angle(0, 55)
+                steering = -1
+            elif status_left == 0 and status_middle == 1 and status_right == 1:
+                set_angle(0, 105)
+                steering = 1
+            elif status_left == 0 and status_middle == 0 and status_right == 1:
+                set_angle(0, 125)
+                steering = 1
+            elif status_left == 0 and status_middle == 1 and status_left == 0:
+                set_angle(0, 90)
+                steering = 0
+            elif status_right == 1 and status_middle == 1 and status_left == 1:
+                set_angle(0, 90)
+                steering = 0
+            
+            # Gestion d'accélération
+            if status_right == 0 and status_middle == 0 and status_left == 0:
+                robot_motor.accelerate_to(30, -1, acceleration = 2)
+                if -4 < robot_motor.speed < 4:
+                    if steering == 0: set_angle(0, 90)
+                    if steering == 1: set_angle(0, 75)
+                    if steering == -1: set_angle(0, 105)
+            else:
+                robot_motor.accelerate_to(40, 1, acceleration = 5)
 
-  except KeyboardInterrupt:
-    destroy()
+        else:
+            # Si le robot est à l'arrêt manuel (A)
+            robot_motor.accelerate_to(0, 1, acceleration = 10)
+            
+        robot_motor.update_speed()
+        sleep(0.05)
+
+if __name__ == "__main__":
+    bg_thread = threading.Thread(target=background_task, daemon=True)
+    bg_thread.start()
+
+    light_thread = threading.Thread(target=led_task, daemon=True)
+    light_thread.start()
+    
+    print("=== DÉMARRAGE ROBOT : TÂCHE 10 ===")
+    print("- Entrez 'M' pour lancer la marche avant.")
+    print("- Entrez 'A' pour l'arrêt immédiat.\n")
+    
+    try:
+        while True:
+            choice = input("Commande (M/A) : ").strip().upper()
+            if choice == 'M':
+                status = 1
+            elif choice == 'A':
+                status = 0
+                robot_motor.stop() # Force l'arrêt immédiat matériellement
+                tb.stop() # Coupe le buzzer
+                led_strip.set_all_led_color(0, 0, 0) # Éteint les LEDs
+    except KeyboardInterrupt:
+        running = False
+        robot_motor.stop()
+        robot_motor.destroy()
+        tb.stop()
+        led_strip.led_close()
+        print("\nSortie propre...")
