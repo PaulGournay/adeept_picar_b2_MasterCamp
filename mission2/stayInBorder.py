@@ -65,17 +65,15 @@ def background_task():
             status_middle = middle.value
             status_left   = left.value
 
-            if status_left == 1 and status_middle == 0:
+            if status_left == 1 and status_middle == 1:
                 # border on the left, turn away right
                 turn_away_from_border('left')
-            elif status_right == 1 and status_middle == 0:
+            elif status_right == 1 and status_middle == 1:
                 # border on the right → turn away left
                 turn_away_from_border('right')
             elif status_left == 1 and status_right == 1:
                 # both sides hit, reverse straight
-                set_angle(0, 90)
-                robot_motor.set_speed(20, -1)
-                sleep(0.4)
+                turn_away_from_border('right')
             else:
                 # all clear, go forward
                 robot_motor.accelerate_to(40, 1, acceleration=5)
