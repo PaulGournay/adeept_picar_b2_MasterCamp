@@ -1,3 +1,4 @@
+import smbus
 import time
 import threading
 from time import sleep
@@ -154,6 +155,17 @@ def handle_obstacle():
         
     print("[!] Reprise du suivi de lumière.")
 
+class ADS7830(object):
+    def __init__(self):
+        self.cmd = 0x84
+        self.bus=smbus.SMBus(1)
+        self.address = 0x48 # 0x48 is the default i2c address for ADS7830 Module.   
+
+    def analogRead(self, chn): # ADS7830 has 8 ADC input pins, chn:0,1,2,3,4,5,6,7
+        value = self.bus.read_byte_data(self.address, self.cmd|(((chn<<2 | chn>>1)&0x07)<<4))
+        return value
+
+
 def background_task():
     global running, steering, status
 
@@ -164,39 +176,7 @@ def background_task():
                 handle_obstacle()
                 continue # Passe l'itération pour ne pas écraser la séquence
 
-            # Logique de suivi "Source Lumineuse" (Tâche 9 conservée)
-            status_right = right.value
-            status_middle = middle.value
-            status_left = left.value
-            
-            if status_left == 1 and status_middle == 1 and status_right == 0:
-                set_angle(0, 75)
-                steering = -1
-            elif status_left == 1 and status_middle == 0 and status_right == 0:
-                set_angle(0, 55)
-                steering = -1
-            elif status_left == 0 and status_middle == 1 and status_right == 1:
-                set_angle(0, 105)
-                steering = 1
-            elif status_left == 0 and status_middle == 0 and status_right == 1:
-                set_angle(0, 125)
-                steering = 1
-            elif status_left == 0 and status_middle == 1 and status_left == 0:
-                set_angle(0, 90)
-                steering = 0
-            elif status_right == 1 and status_middle == 1 and status_left == 1:
-                set_angle(0, 90)
-                steering = 0
-            
-            # Gestion d'accélération
-            if status_right == 0 and status_middle == 0 and status_left == 0:
-                robot_motor.accelerate_to(30, -1, acceleration = 2)
-                if -4 < robot_motor.speed < 4:
-                    if steering == 0: set_angle(0, 90)
-                    if steering == 1: set_angle(0, 75)
-                    if steering == -1: set_angle(0, 105)
-            else:
-                robot_motor.accelerate_to(40, 1, acceleration = 5)
+            robot_motor.accelerate_to(30, 1, acceleration = 2)
 
         else:
             # Si le robot est à l'arrêt manuel (A)
@@ -205,12 +185,41 @@ def background_task():
         robot_motor.update_speed()
         sleep(0.05)
 
+
+def light_direction_task():
+    global running
+
+    adc = ADS7830()
+    previous_angle = 0
+    servo_ = servo.Servo(pwm_motor.channels[0], min_pulse=500, max_pulse=2400,actuation_range=180)
+
+    while running:
+        if status != 1:
+            continue
+            
+        adc_value = adc.analogRead(1)
+        target_angle = 180 - ((adc_value / 255) * 180)
+
+        if target_angle < 20: target_angle = 20
+        elif target_angle > 160: target_angle = 160
+
+        if not (-10 <= previous_angle - target_angle <= 10):
+            previous_angle = target_angle
+            servo_.angle = target_angle
+        
+        sleep(0.05)
+
+
+
 if __name__ == "__main__":
     bg_thread = threading.Thread(target=background_task, daemon=True)
     bg_thread.start()
 
     light_thread = threading.Thread(target=led_task, daemon=True)
     light_thread.start()
+
+    light_direction_thread = threading.Thread(target=light_direction_task, daemon=True)
+    light_direction_thread.start()
     
     print("=== DÉMARRAGE ROBOT : TÂCHE 10 ===")
     print("- Entrez 'M' pour lancer la marche avant.")
