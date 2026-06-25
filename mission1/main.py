@@ -5,14 +5,13 @@ import busio
 from board import SCL, SDA
 from gpiozero import DistanceSensor
 from adafruit_pca9685 import PCA9685
-import warnings
-from adafruit_motor import servo
 from board import SCL, SDA
 import busio
 from adafruit_motor import motor
 from adafruit_motor import servo
 from gpiozero import InputDevice
 from gpiozero import PWMOutputDevice as PWM
+from servo import Servo
 
 from smooth_motor import SmoothMotor
 
@@ -24,26 +23,6 @@ left = InputDevice(pin=line_pin_right)
 middle = InputDevice(pin=line_pin_middle)
 right = InputDevice(pin=line_pin_left)
 
-# Masque les avertissements inutiles de gpiozero
-warnings.filterwarnings("ignore")
-
-# Feu gauche (Left)
-Left_R = 13
-Left_G = 19
-Left_B = 0
-
-# Feu droit (Right)
-Right_R = 1
-Right_G = 5
-Right_B = 6
-
-L_R = PWM(pin=Left_R, initial_value=1.0, frequency=2000)
-L_G = PWM(pin=Left_G, initial_value=1.0, frequency=2000)
-L_B = PWM(pin=Left_B, initial_value=1.0, frequency=2000)
-R_R = PWM(pin=Right_R, initial_value=1.0, frequency=2000)
-R_G = PWM(pin=Right_G, initial_value=1.0, frequency=2000)
-R_B = PWM(pin=Right_B, initial_value=1.0, frequency=2000)
-
 MOTOR_M1_IN1 = 15
 MOTOR_M1_IN2 = 14
 
@@ -53,6 +32,8 @@ i2c = busio.I2C(SCL, SDA)
 #  pwm_motor.channels[7].duty_cycle = 0xFFFF
 pwm_motor = PCA9685(i2c, address=0x5f) #default 0x40
 pwm_motor.frequency = 50
+
+direction = Servo(pwm_motor, 0, center=96)
 
 m = motor.DCMotor(pwm_motor.channels[MOTOR_M1_IN1],pwm_motor.channels[MOTOR_M1_IN2])
 m.decay_mode = (motor.SLOW_DECAY)
@@ -71,61 +52,6 @@ running = True
 status = 0
 steering = 0
 
-def set_angle(ID, angle):
-    servo_angle = servo.Servo(pwm_motor.channels[ID], min_pulse=500, max_pulse=2400,actuation_range=180)
-    servo_angle.angle = angle
-
-def led_task():
-    x = 0
-    N = 20
-    L_B.value = 1.0
-    R_B.value = 1.0
-    R_G.value = 1.0
-    R_R.value = 1.0
-    L_G.value = 1.0
-    L_R.value = 1.0
-
-    while running:
-        s = steering
-
-        if robot_motor.speed > 0:
-            s *= -1
-
-        if s == 0:
-            x = 0
-            R_G.value = 1.0
-            R_R.value = 1.0
-            L_G.value = 1.0
-            L_R.value = 1.0
-        if s == 1:
-            x += 1
-            x %= N
-            if x < N/2:
-                R_G.value = 1.0
-                R_R.value = 1.0
-                L_G.value = 1.0
-                L_R.value = 1.0
-            else:
-                R_G.value = 0.0
-                R_R.value = 0.0
-                L_G.value = 1.0
-                L_R.value = 1.0
-        if s == -1:
-            x += 1
-            x %= N
-            if x < N/2:
-                R_G.value = 1.0
-                R_R.value = 1.0
-                L_G.value = 1.0
-                L_R.value = 1.0
-            else:
-                R_G.value = 1.0
-                R_R.value = 1.0
-                L_G.value = 0.0
-                L_R.value = 0.0
-        sleep(0.05)
-
-
 def background_task():
     global running
     global steering
@@ -142,40 +68,52 @@ def background_task():
             status_left = left.value
             # print('left: %d   middle: %d   right: %d' %(status_right,status_middle,status_left))
             if status_left == 1 and status_middle == 1 and status_right == 0:
-                set_angle(0, basis_angle - angle1)
+                direction.go_to_angle(-angle1)
                 steering = -1
+                robot_motor.accelerate_to(20, 1, acceleration = 1)
             if status_left == 1 and status_middle == 0 and status_right == 0:
-                set_angle(0, basis_angle - angle2)
+                direction.angle = -angle2
+                direction.target_angle = direction.angle
                 steering = -1
+                robot_motor.accelerate_to(20, 1, acceleration = 1)
             if status_left == 0 and status_middle == 1 and status_right == 1:
-                set_angle(0, basis_angle + angle1)
+                direction.go_to_angle(angle1)
                 steering = 1
+                robot_motor.accelerate_to(20, 1, acceleration = 1)
             if status_left == 0 and status_middle == 0 and status_right == 1:
-                set_angle(0, basis_angle + angle2)
+                direction.angle = angle2
+                direction.target_angle = direction.angle
                 steering = 1
+                robot_motor.accelerate_to(20, 1, acceleration = 1)
             if status_left == 0 and status_middle == 1 and status_left == 0:
-                set_angle(0, basis_angle)
+                direction.angle = 0
+                direction.target_angle = 0
                 steering = 0
+                robot_motor.accelerate_to(60, 1, acceleration = 5)
             if status_right == 1 and status_middle == 1 and status_left == 1:
-                set_angle(0, basis_angle)
+                direction.angle = 0
+                direction.target_angle = 0
                 steering = 0
+                robot_motor.accelerate_to(60, 1, acceleration = 5)
             if status_right == 0 and status_middle == 0 and status_left == 0:
-                robot_motor.accelerate_to(30, -1, acceleration = 5)
+                robot_motor.accelerate_to(30, -1, acceleration = 2)
                 if -4 < robot_motor.speed < 4:
                     if steering == 0:
-                        set_angle(0, basis_angle)
+                        direction.angle = 0
+                        direction.target_angle = 0
                     if steering == 1:
-                        set_angle(0, basis_angle - angle1)
+                        direction.angle = -angle1
+                        direction.target_angle = -angle1
                     if steering == -1:
-                        set_angle(0, basis_angle + angle1)
-            else:
-                robot_motor.accelerate_to(40, 1, acceleration = 5)
+                        direction.angle = angle1
+                        direction.target_angle = angle1
             
             if checkdist() <= 20:
                 status = 0
         else:
             robot_motor.accelerate_to(0, 1, acceleration = 2)
         robot_motor.update_speed()
+        direction.update_angle()
         sleep(0.05)
 
 if __name__ == "__main__":

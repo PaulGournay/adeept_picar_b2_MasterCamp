@@ -11,8 +11,6 @@ class SmoothMotor:
 
     def stop(self):
         self.motor.throttle = 0
-        self.speed = 0
-        self.target_speed = 0
 
     def accelerate_to(self, speed, direction, acceleration=1):
         self.acceleration = acceleration
