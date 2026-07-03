@@ -1,15 +1,8 @@
-import cv2
-import numpy as np
-import time
-import threading
-from flask import Flask, Response, redirect
-from picamera2 import Picamera2
-
-# Imports matériels
 import busio
 from board import SCL, SDA
 from adafruit_pca9685 import PCA9685
 from adafruit_motor import motor
+from gpiozero import DistanceSensor
 from smooth_motor import SmoothMotor
 from servo import Servo
 
@@ -19,8 +12,8 @@ from servo import Servo
 app = Flask(__name__)
 global_debug_frame = None
 
-etat_robot = "REPOS" 
-compteur_fleches = 0  
+etat_robot = "REPOS"
+compteur_fleches = 0
 confirmations_vue = 0
 
 def generate_video_stream():
@@ -29,11 +22,11 @@ def generate_video_stream():
         if global_debug_frame is None:
             time.sleep(0.1)
             continue
-        
+
         ret, buffer = cv2.imencode('.jpg', global_debug_frame)
         if not ret:
             continue
-            
+
         frame_bytes = buffer.tobytes()
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
@@ -64,7 +57,7 @@ def video_feed():
 def action_relancer():
     global etat_robot, compteur_fleches
     etat_robot = "RECHERCHE"
-    compteur_fleches = 0  
+    compteur_fleches = 0
     print("Action Web : Mission relancée depuis le début !")
     return redirect('/')
 
@@ -98,6 +91,16 @@ m = motor.DCMotor(pwm_motor.channels[MOTOR_M1_IN1], pwm_motor.channels[MOTOR_M1_
 m.decay_mode = motor.SLOW_DECAY
 propulsion = SmoothMotor(m, 3)
 
+# Initialisation du Capteur de Distance (Ultrasons)
+Tr = 23
+Ec = 24
+sensor = DistanceSensor(echo=Ec, trigger=Tr, max_distance=2)
+
+def checkdist():
+    return sensor.distance * 100  # Retourne la distance en cm
+
+DISTANCE_OBSTACLE_CM = 15 # La distance critique avant de faire marche arrière
+
 # ==========================================
 # 2. VISION (Flèches + Ligne Rouge + Centre)
 # ==========================================
@@ -106,8 +109,8 @@ def analyze_frame(img):
     h, w = img.shape[:2]
     ordre_direction = None
     angle_suivi_ligne = None
-    centre_fleche_x = None  
-    surface_fleche = None # Nouvelle variable pour connaître la distance !
+    centre_fleche_x = None
+    surface_fleche = None
 
     # --- A. DÉTECTION DE LA FLÈCHE ---
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -115,51 +118,42 @@ def analyze_frame(img):
     _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     kernel = np.ones((5, 5), np.uint8)
     clean_mask = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-    
+
     contours, _ = cv2.findContours(clean_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
+
     for contour in contours:
         surface = cv2.contourArea(contour)
-        
-        # 1. Filtre de base sur la taille (15000 pour voir de loin)
+
         if 15000 <= surface <= 65000:
-            
-            # --- LE NOUVEAU FILTRE ANTI-BRUIT (SOLIDITÉ) ---
-            hull = cv2.convexHull(contour) # On dessine "l'élastique"
+            hull = cv2.convexHull(contour)
             hull_area = cv2.contourArea(hull)
-            
+
             if hull_area > 0:
                 solidity = float(surface) / hull_area
-                
-                # Une vraie flèche a une solidité typiquement entre 0.45 et 0.80
-                # Si la forme est trop "pleine" (ex: > 0.85), on l'ignore : c'est du bruit !
                 if not (0.45 <= solidity <= 0.85):
-                    continue # On passe au contour suivant
-            # -----------------------------------------------
+                    continue
 
             perimetre = cv2.arcLength(contour, True)
             approx = cv2.approxPolyDP(contour, 0.02 * perimetre, True)
-            
-            # Et on garde notre vérification des 7 sommets
+
             if len(approx) == 7:
                 cv2.drawContours(display_frame, [approx], -1, (0, 255, 0), 3)
                 x_coords = [point[0][0] for point in approx]
                 x_moyenne = int((np.min(x_coords) + np.max(x_coords)) / 2)
-                
-                centre_fleche_x = x_moyenne  
-                surface_fleche = surface 
-                
+
+                centre_fleche_x = x_moyenne
+                surface_fleche = surface
+
                 cv2.line(display_frame, (x_moyenne, 0), (x_moyenne, h), (255, 0, 0), 2)
-                
+
                 cote_gauche = sum(1 for x in x_coords if x < x_moyenne)
                 cote_droit = sum(1 for x in x_coords if x > x_moyenne)
-                        
+
                 if cote_droit > cote_gauche:
                     ordre_direction = "DROITE"
                 else:
                     ordre_direction = "GAUCHE"
-                
-                # J'affiche la solidité sur l'écran pour que tu puisses la voir en direct !
+
                 cv2.putText(display_frame, f"FLECHE {ordre_direction} (Sol: {solidity:.2f})", (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 3)
                 break
 
@@ -170,7 +164,7 @@ def analyze_frame(img):
     mask_red = cv2.inRange(img_hsv, lower_red, upper_red)
 
     points = []
-    for y in range(0, h, 10): 
+    for y in range(0, h, 10):
         xs = np.where(mask_red[y, :] > 0)[0]
         if len(xs) > 0:
             cx = int(np.mean(xs))
@@ -179,60 +173,60 @@ def analyze_frame(img):
 
     if len(points) > 0:
         moyenne_x = np.mean(points)
-        deg = (moyenne_x * 70 / w) - 35
+        deg = (moyenne_x * 90 / w) - 45
         angle_suivi_ligne = -1 * deg
         cv2.circle(display_frame, (int(moyenne_x), h // 2), 10, (0, 255, 0), -1)
 
-    # On renvoie aussi la surface (taille) de la flèche !
     return ordre_direction, centre_fleche_x, surface_fleche, angle_suivi_ligne, display_frame
 
 # ==========================================
 # 3. LA MANŒUVRE DE CRÉNEAU
 # ==========================================
+def _avancer_jusqu_a_obstacle(t_max, distance_cm):
+    """Fonction qui fait avancer le robot jusqu'à un obstacle ou un temps limite"""
+    t_debut = time.time()
+    while checkdist() > distance_cm:
+        if (time.time() - t_debut) >= t_max:
+            return False
+        time.sleep(0.05)
+    return True
+
 def faire_creneau(direction_ordre):
-    print(f"\n--- DÉBUT MANŒUVRE EN 4 ÉTAPES VERS LA {direction_ordre} ---")
+    print(f"\n--- DÉBUT MANŒUVRE EN 6 ÉTAPES SACCADÉES VERS LA {direction_ordre} ---")
     propulsion.stop()
     time.sleep(0.5)
-    
-    VITESSE = 25           
-    TEMPS_AVANT = 1.7 
-    TEMPS_ARRIERE = 1.7
-    ANGLE_MAX = 40         
-    
+
+
+    VITESSE = 25
+    ANGLE_MAX = 40
+
     angle_braquage = -ANGLE_MAX if direction_ordre == "DROITE" else ANGLE_MAX
     angle_inverse = ANGLE_MAX if direction_ordre == "DROITE" else -ANGLE_MAX
-    
-    print("1. Avance...")
+
+    # La fameuse boucle d'aller-retour rapide
+    for i in range(6):
+        # Braque dans le sens de la flèche et avance un coup sec
+        direction.angle = angle_braquage
+        propulsion.set_speed(speed=VITESSE, direction=1)
+        time.sleep(0.40)
+
+        # Contre-braque et recule un coup sec
+        direction.angle = angle_inverse
+        propulsion.set_speed(speed=VITESSE, direction=-1)
+        time.sleep(0.40)
+
+    # Dernier petit coup en avant pour finaliser le mouvement
     direction.angle = angle_braquage
-    time.sleep(0.5)
-    propulsion.set_speed(speed=VITESSE, direction=1) 
-    time.sleep(TEMPS_AVANT) 
-    
-    print("2. Recule...")
-    propulsion.stop()
-    direction.angle = angle_inverse
-    time.sleep(0.5)
-    propulsion.set_speed(speed=VITESSE, direction=-1) 
-    time.sleep(TEMPS_ARRIERE) 
-    
-    print("3. Avance pour accentuer l'angle...")
-    propulsion.stop()
-    direction.angle = angle_braquage
-    time.sleep(0.5)
     propulsion.set_speed(speed=VITESSE, direction=1)
-    time.sleep(TEMPS_AVANT) 
-    
-    print("4. Alignement final...")
+    time.sleep(0.36)
+
     propulsion.stop()
     direction.angle = 0
-    propulsion.set_speed(speed=VITESSE, direction=-1)
-    time.sleep(TEMPS_ARRIERE)
-    propulsion.stop()
-    time.sleep(2)
+    time.sleep(0.5)
     print("--- FIN MANŒUVRE ---\n")
 
 # ==========================================
-# 4. BOUCLE PRINCIPALE 
+# 4. BOUCLE PRINCIPALE
 # ==========================================
 print("Démarrage du serveur web de Debug...")
 server_thread = threading.Thread(target=run_flask_server, daemon=True)
@@ -255,100 +249,141 @@ try:
     while True:
         img = picam2.capture_array()
         h, w = img.shape[:2]
-        
-        # On déballe les 5 infos retournées (on a ajouté la surface)
+
         ordre, centre_fleche_x, surface_fleche, angle_ligne, frame_dessinee = analyze_frame(img)
-        
+
+        # --- Affichage sur le retour vidéo ---
+        dist_actuelle = checkdist()
         cv2.putText(frame_dessinee, f"ETAT: {etat_robot} | FLECHES: {compteur_fleches}/3", (10, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        
-        # Affichage de la distance (surface) sur le debug pour t'aider à régler
+        cv2.putText(frame_dessinee, f"Obstacle: {dist_actuelle:.0f} cm", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
         if surface_fleche is not None:
-            cv2.putText(frame_dessinee, f"Dist (Surface): {int(surface_fleche)}", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            cv2.putText(frame_dessinee, f"Dist Fleche: {int(surface_fleche)}", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
         global_debug_frame = frame_dessinee
 
         # --- MACHINE À ÉTATS ---
-        
-        if etat_robot == "RECHERCHE":
+
+        # 🛡️ LE BOUCLIER ANTI-COLLISION (Le réflexe de survie !)
+        if dist_actuelle < DISTANCE_OBSTACLE_CM and etat_robot in ["RECHERCHE", "CENTRAGE", "SUIVI_LIGNE"]:
+            print(f"⚠️ MUR DÉTECTÉ TROP PRÈS ({dist_actuelle:.0f} cm) ! Marche arrière de sécurité.")
+            etat_robot = "EVITEMENT_MUR"
+
+        if etat_robot == "EVITEMENT_MUR":
+            # 1. On coupe tout
+            propulsion.stop()
+            time.sleep(0.3)
+
+            # 2. On met les roues droites et on recule
+            direction.angle = 0
+            time.sleep(0.2)
+            propulsion.set_speed(speed=25, direction=-1) # -1 = Reculer
+            time.sleep(1.5) # On recule d'une bonne distance pendant 1,5s
+            propulsion.stop()
+            time.sleep(0.3)
+
+            # 3. On reprend la mission où on l'avait laissée
+            print("Dégagement terminé. Reprise de la mission.")
+            if compteur_fleches >= 3:
+                etat_robot = "SUIVI_LIGNE"
+            else:
+                etat_robot = "RECHERCHE"
+                confirmations_vue = 0
+
+        elif etat_robot == "RECHERCHE":
             if ordre is not None:
                 confirmations_vue += 1
                 print(f"Flèche potentielle repérée... ({confirmations_vue}/3)")
-                
-                # On ne déclenche l'approche QUE s'il l'a vue 3 fois d'affilée !
+
                 if confirmations_vue >= 3:
-                    print(f"Flèche {ordre} CONFIRMÉE ! Début du centrage...")
+                    print(f"Flèche {ordre} CONFIRMÉE ! Je recule pour prendre de l'élan...")
+                    propulsion.stop()
+                    direction.angle = 0
+                    time.sleep(0.3)
+                    propulsion.set_speed(25, -1)
+                    time.sleep(1.0)
+                    propulsion.stop()
+                    time.sleep(0.2)
+
                     etat_robot = "CENTRAGE"
                     direction_a_prendre = ordre
-                    confirmations_vue = 0 # On remet à zéro pour la prochaine étape
+                    confirmations_vue = 0
             else:
-                confirmations_vue = 0 # Fausse alerte, on remet le compteur à zéro
+                confirmations_vue = 0
                 direction.angle = 0
-                propulsion.set_speed(20, 1) 
+                propulsion.set_speed(20, 1)
 
         elif etat_robot == "CENTRAGE":
             if centre_fleche_x is not None:
                 erreur = centre_fleche_x - (w / 2)
                 deg_centrage = (centre_fleche_x * 70 / w) - 35
-                direction.angle = -1 * deg_centrage 
-                
+                direction.angle = -1 * deg_centrage
+
                 if 50000 <= surface_fleche <= 60000:
-                    if abs(erreur) < 40: 
+                    if abs(erreur) < 40:
                         confirmations_vue += 1
-                        # On s'assure qu'il est bien centré et à la bonne taille pendant 3 images
                         if confirmations_vue >= 3:
                             propulsion.stop()
                             print(f"Position parfaite confirmée ! Lancement du créneau.")
                             etat_robot = "MANOEUVRE"
                             confirmations_vue = 0
                         else:
-                            propulsion.stop() # On s'arrête une fraction de seconde pour stabiliser
+                            propulsion.stop()
                     else:
                         confirmations_vue = 0
-                        propulsion.set_speed(15, 1) 
-                        
+                        propulsion.set_speed(15, 1)
+
                 elif surface_fleche < 50000:
                     confirmations_vue = 0
-                    propulsion.set_speed(20, 1) 
-                    
-                else: # Surface > 60000
-                    # Même sécurité anti-bruit ici, on ne panique pas sur 1 seule image géante
-                    confirmations_vue += 1
-                    if confirmations_vue >= 3:
+                    propulsion.set_speed(20, 1)
+
+                else:
+                    if abs(erreur) < 40:
+                        confirmations_vue += 1
+                        if confirmations_vue >= 3:
+                            propulsion.stop()
+                            print("Flèche très proche MAIS bien centrée ! Lancement.")
+                            etat_robot = "MANOEUVRE"
+                            confirmations_vue = 0
+                    else:
+                        print("Trop proche et MAL CENTRÉ ! Je recule pour réessayer...")
                         propulsion.stop()
-                        print("Flèche vraiment très proche ! Forçage du créneau.")
-                        etat_robot = "MANOEUVRE"
+                        direction.angle = 0
+                        time.sleep(0.3)
+                        propulsion.set_speed(25, -1)
+                        time.sleep(1.2)
+                        propulsion.stop()
                         confirmations_vue = 0
+
             else:
-                # S'il perd la flèche de vue 1 fraction de seconde, il ne force plus le créneau direct
-                # Il continue juste d'avancer doucement
                 propulsion.set_speed(15, 1)
 
         elif etat_robot == "MANOEUVRE":
             compteur_fleches += 1
             print(f"Flèche validée ! (Total: {compteur_fleches}/3).")
-            
+
             faire_creneau(direction_a_prendre)
-            
+
             if compteur_fleches >= 3:
                 print("🎯 Objectif atteint : 3 flèches ! Passage en mode SUIVI DE LIGNE ROUGE.")
                 etat_robot = "SUIVI_LIGNE"
             else:
                 print(f"Reprise de la recherche (Encore {3 - compteur_fleches} flèche(s) à trouver).")
                 etat_robot = "RECHERCHE"
-                
+
                 direction.angle = 0
                 propulsion.set_speed(25, 1)
-                time.sleep(1.5)
-                
+                _avancer_jusqu_a_obstacle(t_max=1.5, distance_cm=DISTANCE_OBSTACLE_CM)
+                propulsion.stop()
+
         elif etat_robot == "SUIVI_LIGNE":
-            # Ta modification cam2 : on baisse la tête pour voir le sol et la ligne
             cam2.angle = -20
             if angle_ligne is not None:
                 direction.angle = angle_ligne
-                propulsion.set_speed(70, 1) 
+                propulsion.set_speed(50, 1)
             else:
                 propulsion.stop()
-            
+
         elif etat_robot == "REPOS":
             propulsion.stop()
 
