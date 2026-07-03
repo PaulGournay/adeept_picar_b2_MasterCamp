@@ -156,12 +156,21 @@ if __name__ == "__main__":
             print(scan)
             set_angle_ch1(90)
 
-            if scan[0] == scan[2] or (scan[0] > 160 and scan[2] > 160):
-                # TODO: tourner à droite ou à gauche en fonction des décisions précédentes
-                pass
+            if scan[0] == scan[2] or (scan[0] > 160 and scan[2] > 160): # même distance à gauche et à droite (ou obstacle trop loins des deux côtés)
+                if len(previous_directions) == 0:
+                    previous_directions.append(-1)
+                    maneuvre(-1, 1.5, 2.75, 0.3)
+                elif previous_directions.count(-1) > previous_directions.count(1):
+                    previous_directions.append(1)
+                    maneuvre(1, 1.5, 2.75, 0.3)
+                else:
+                    previous_directions.append(-1)
+                    maneuvre(-1, 1.5, 2.75, 0.3)
+
             elif scan[0] > scan[2]: # tourner à gauche
                 previous_directions.append(-1)
-                maneuvre(-1)
+                maneuvre(-1, 1.5, 2.75, 0.3)
+
             else: # tourner à droite
                 previous_directions.append(1)
-                maneuvre(1)
+                maneuvre(1, 1.5, 2.75, 0.3)
